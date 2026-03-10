@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Browser VNC</title>
+  <style>
+    /* ── Reset & base ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #141414;
+      --surface: #1f1f1f;
+      --surface2: #2a2a2a;
+      --border: #383838;
+      --text: #e2e2e2;
+      --muted: #888;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --danger: #ef4444;
+      --danger-hover: #dc2626;
+      --green: #22c55e;
+      --radius: 6px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* ── Toolbar ── */
+    #toolbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 6px 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+      height: 44px;
+    }
+
+    .icon-btn {
+      background: transparent;
+      border: none;
+      border-radius: var(--radius);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      padding: 4px 7px;
+      transition: background 0.15s, color 0.15s;
+    }
+    .icon-btn:hover { background: var(--surface2); color: var(--text); }
+    .icon-btn:disabled { opacity: 0.35; cursor: default; }
+
+    #url-bar {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      color: var(--text);
+      font-size: 13px;
+      outline: none;
+      padding: 5px 14px;
+      transition: border-color 0.15s;
+    }
+    #url-bar:focus { border-color: var(--accent); }
+
+    .btn {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 13px;
+      padding: 5px 12px;
+      transition: background 0.15s;
+      white-space: nowrap;
+    }
+    .btn:hover { background: #333; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); }
+    .btn.primary:hover { background: var(--accent-hover); }
+    .btn.danger  { background: var(--danger);  border-color: var(--danger); }
+    .btn.danger:hover { background: var(--danger-hover); }
+
+    .divider { width: 1px; height: 22px; background: var(--border); flex-shrink: 0; }
+
+    #conn-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    #conn-dot.connected { background: var(--green); }
+
+    /* ── Setup panel ── */
+    #setup-panel {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      width: 100%;
+      max-width: 440px;
+    }
+    .card h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+    .card p  { font-size: 13px; color: var(--muted); margin-bottom: 24px; }
+
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; letter-spacing: 0.03em; text-transform: uppercase; }
+    .field input {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+      padding: 8px 12px;
+      transition: border-color 0.15s;
+    }
+    .field input:focus { border-color: var(--accent); }
+
+    .row { display: flex; gap: 10px; }
+    .row .field { flex: 1; }
+
+    #launch-btn { width: 100%; padding: 10px; font-size: 15px; margin-top: 8px; }
+    #error-msg  { color: #f87171; font-size: 13px; margin-top: 10px; display: none; }
+
+    /* ── Viewer panel ── */
+    #viewer-panel {
+      flex: 1;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Top progress bar */
+    #progress-bar {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: var(--accent);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.3s ease;
+      z-index: 10;
+    }
+    #progress-bar.active {
+      animation: progress-anim 1.4s ease-in-out infinite;
+    }
+    @keyframes progress-anim {
+      0%   { transform: scaleX(0);   transform-origin: left; }
+      45%  { transform: scaleX(0.9); transform-origin: left; }
+      46%  { transform: scaleX(0.9); transform-origin: right; }
+      100% { transform: scaleX(0);   transform-origin: right; }
+    }
+
+    #canvas-wrap {
+      flex: 1;
+      overflow: auto;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      background: #0a0a0a;
+    }
+
+    #browser-canvas {
+      display: block;
+      cursor: default;
+      /* crisp pixel rendering for JPEG frames */
+      image-rendering: -webkit-optimize-contrast;
+      image-rendering: crisp-edges;
+    }
+    #browser-canvas:focus { outline: none; }
+
+    /* ── Status bar ── */
+    #status-bar {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 3px 12px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Toolbar ──────────────────────────────────────────────── -->
+<div id="toolbar">
+  <button class="icon-btn" id="btn-back"    onclick="sendEvent({type:'back'})"    title="Back">&#8592;</button>
+  <button class="icon-btn" id="btn-fwd"     onclick="sendEvent({type:'forward'})" title="Forward">&#8594;</button>
+  <button class="icon-btn" id="btn-reload"  onclick="sendEvent({type:'reload'})"  title="Reload">&#8635;</button>
+  <input  type="text" id="url-bar" placeholder="Enter URL and press Enter…" onkeydown="onUrlKey(event)" />
+  <button class="btn primary" onclick="goUrl()">Go</button>
+  <div class="divider"></div>
+  <div id="conn-dot" title="Connection status"></div>
+  <button class="btn danger" id="btn-close" onclick="closeSession()" style="display:none">✕ Disconnect</button>
+</div>
+
+<!-- ── Setup panel ──────────────────────────────────────────── -->
+<div id="setup-panel">
+  <div class="card">
+    <h1>🖥️ Browser VNC</h1>
+    <p>Launch a remote Chromium session and control it in real-time.</p>
+
+    <div class="field">
+      <label>Start URL</label>
+      <input type="text" id="i-url" value="https://example.com" />
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label>Width</label>
+        <input type="number" id="i-w" value="1280" min="320" max="3840" />
+      </div>
+      <div class="field">
+        <label>Height</label>
+        <input type="number" id="i-h" value="720" min="240" max="2160" />
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Browserless URL (optional override)</label>
+      <input type="text" id="i-bl" placeholder="http://localhost:3000" />
+    </div>
+
+    <button class="btn primary" id="launch-btn" onclick="startSession()">Launch Browser</button>
+    <div id="error-msg"></div>
+  </div>
+</div>
+
+<!-- ── Viewer panel ─────────────────────────────────────────── -->
+<div id="viewer-panel">
+  <div id="progress-bar"></div>
+  <div id="canvas-wrap">
+    <canvas id="browser-canvas" tabindex="0"></canvas>
+  </div>
+</div>
+
+<!-- ── Status bar ───────────────────────────────────────────── -->
+<div id="status-bar">
+  <span id="sb-url" title="Current page URL">–</span>
+  <span id="sb-info">Disconnected</span>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+let ws         = null;
+let sessionId  = null;
+let canvas     = null;
+let ctx        = null;
+let BW         = 1280;   // browser viewport width (authoritative)
+let BH         = 720;    // browser viewport height
+
+// ── Session lifecycle ─────────────────────────────────────────────────────────
+
+async function startSession() {
+  const url  = document.getElementById('i-url').value.trim() || 'https://example.com';
+  const w    = parseInt(document.getElementById('i-w').value) || 1280;
+  const h    = parseInt(document.getElementById('i-h').value) || 720;
+  const blUrl= document.getElementById('i-bl').value.trim();
+  const errEl= document.getElementById('error-msg');
+  errEl.style.display = 'none';
+
+  document.getElementById('launch-btn').disabled = true;
+  document.getElementById('launch-btn').textContent = 'Launching…';
+
+  try {
+    const body = { url, width: w, height: h };
+    if (blUrl) body.browserless_url = blUrl;
+
+    const resp = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      const e = await resp.json().catch(() => ({ detail: resp.statusText }));
+      throw new Error(e.detail || 'Server error');
+    }
+    const info = await resp.json();
+    BW = w; BH = h;
+    sessionId = info.session_id;
+    connectWS(info.ws_url);
+  } catch (e) {
+    errEl.textContent = '✖ ' + e.message;
+    errEl.style.display = 'block';
+  } finally {
+    document.getElementById('launch-btn').disabled = false;
+    document.getElementById('launch-btn').textContent = 'Launch Browser';
+  }
+}
+
+function connectWS(wsPath) {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url   = `${proto}//${location.host}${wsPath}`;
+  ws = new WebSocket(url);
+  ws.onopen    = onOpen;
+  ws.onmessage = onMessage;
+  ws.onclose   = onClose;
+  ws.onerror   = e => console.error('[WS] error', e);
+}
+
+function onOpen() {
+  setStatus('Connected');
+  dot(true);
+  document.getElementById('setup-panel').style.display  = 'none';
+  document.getElementById('viewer-panel').style.display = 'flex';
+  document.getElementById('btn-close').style.display    = 'inline-block';
+  initCanvas();
+}
+
+function onClose() {
+  setStatus('Disconnected');
+  dot(false);
+  ws = null;
+}
+
+async function closeSession() {
+  if (ws)       { ws.close(); ws = null; }
+  if (sessionId) {
+    await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' }).catch(() => {});
+    sessionId = null;
+  }
+  document.getElementById('viewer-panel').style.display = 'none';
+  document.getElementById('setup-panel').style.display  = 'flex';
+  document.getElementById('btn-close').style.display    = 'none';
+  dot(false);
+  setStatus('Disconnected');
+  updateUrlBar('');
+}
+
+// ── Canvas setup ──────────────────────────────────────────────────────────────
+
+function initCanvas() {
+  canvas = document.getElementById('browser-canvas');
+  ctx    = canvas.getContext('2d');
+  canvas.width  = BW;
+  canvas.height = BH;
+  fitCanvas();
+  window.addEventListener('resize', fitCanvas);
+
+  /* Mouse */
+  canvas.addEventListener('mousemove',   onMouseMove);
+  canvas.addEventListener('mousedown',   onMouseDown);
+  canvas.addEventListener('mouseup',     onMouseUp);
+  canvas.addEventListener('dblclick',    onDblClick);
+  canvas.addEventListener('wheel',       onWheel, { passive: false });
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+  /* Keyboard */
+  canvas.addEventListener('keydown', onKeyDown);
+  canvas.addEventListener('keyup',   onKeyUp);
+  canvas.focus();
+  canvas.addEventListener('click', () => canvas.focus());
+}
+
+function fitCanvas() {
+  if (!canvas) return;
+  const wrap = document.getElementById('canvas-wrap');
+  const scale = Math.min(wrap.clientWidth / BW, wrap.clientHeight / BH);
+  canvas.style.width  = Math.floor(BW * scale) + 'px';
+  canvas.style.height = Math.floor(BH * scale) + 'px';
+}
+
+// ── WebSocket message handling ────────────────────────────────────────────────
+
+function onMessage(ev) {
+  let msg;
+  try { msg = JSON.parse(ev.data); } catch { return; }
+
+  switch (msg.type) {
+    case 'frame':
+      drawFrame(msg.data, msg.format || 'jpeg');
+      if (msg.url) updateUrlBar(msg.url);
+      setLoading(msg.loading || false);
+      break;
+    case 'navigate':
+      updateUrlBar(msg.url);
+      break;
+    case 'loading':
+      setLoading(true);
+      break;
+    case 'loaded':
+      setLoading(false);
+      break;
+  }
+}
+
+const _imgPool = [];   // reuse Image objects to reduce GC pressure
+function drawFrame(b64, fmt) {
+  if (!ctx) return;
+  const img = _imgPool.pop() || new Image();
+  img.onload = () => {
+    ctx.drawImage(img, 0, 0, BW, BH);
+    _imgPool.push(img);        // return to pool
+  };
+  img.src = `data:image/${fmt};base64,${b64}`;
+}
+
+// ── Send helper ───────────────────────────────────────────────────────────────
+
+function sendEvent(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+// ── Coordinate mapping ────────────────────────────────────────────────────────
+
+function canvasXY(e) {
+  const r  = canvas.getBoundingClientRect();
+  const sx = BW / r.width;
+  const sy = BH / r.height;
+  return {
+    x: Math.round((e.clientX - r.left) * sx),
+    y: Math.round((e.clientY - r.top)  * sy),
+  };
+}
+
+// CDP modifier bitmask: Alt=1 Ctrl=2 Meta=4 Shift=8
+function mods(e) {
+  return (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
+}
+
+const BTN = { 0: 'left', 1: 'middle', 2: 'right' };
+
+// ── Mouse events ──────────────────────────────────────────────────────────────
+
+function onMouseMove(e) {
+  const { x, y } = canvasXY(e);
+  sendEvent({ type: 'mousemove', x, y, modifiers: mods(e) });
+}
+
+function onMouseDown(e) {
+  e.preventDefault();
+  canvas.focus();
+  const { x, y } = canvasXY(e);
+  sendEvent({ type: 'mousedown', x, y, button: BTN[e.button] || 'left', clickCount: 1, modifiers: mods(e) });
+}
+
+function onMouseUp(e) {
+  e.preventDefault();
+  const { x, y } = canvasXY(e);
+  sendEvent({ type: 'mouseup', x, y, button: BTN[e.button] || 'left', clickCount: 1, modifiers: mods(e) });
+}
+
+function onDblClick(e) {
+  const { x, y } = canvasXY(e);
+  const m = mods(e);
+  sendEvent({ type: 'mousedown', x, y, button: 'left', clickCount: 2, modifiers: m });
+  sendEvent({ type: 'mouseup',   x, y, button: 'left', clickCount: 2, modifiers: m });
+}
+
+function onWheel(e) {
+  e.preventDefault();
+  const { x, y } = canvasXY(e);
+  sendEvent({ type: 'wheel', x, y, deltaX: e.deltaX, deltaY: e.deltaY, modifiers: mods(e) });
+}
+
+// ── Keyboard events ───────────────────────────────────────────────────────────
+
+// Special key → Windows virtual key code
+const KEY_CODE_MAP = {
+  Backspace:8, Tab:9, Enter:13, Escape:27,
+  Space:32, PageUp:33, PageDown:34, End:35, Home:36,
+  ArrowLeft:37, ArrowUp:38, ArrowRight:39, ArrowDown:40,
+  Insert:45, Delete:46,
+  F1:112, F2:113, F3:114, F4:115, F5:116, F6:117,
+  F7:118, F8:119, F9:120, F10:121, F11:122, F12:123,
+};
+
+// Keys that should be prevented from triggering browser actions on the canvas
+const PREVENT_DEFAULTS = new Set([
+  'Tab', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
+  'Backspace', 'Space', 'F1', 'F3', 'F5', 'F6',
+]);
+
+function onKeyDown(e) {
+  if (PREVENT_DEFAULTS.has(e.key)) e.preventDefault();
+
+  const m       = mods(e);
+  const keyCode = KEY_CODE_MAP[e.key] || e.keyCode || 0;
+
+  // For printable characters without Ctrl/Meta: include text in keyDown
+  const isPrintable = e.key.length === 1 && !e.ctrlKey && !e.metaKey;
+  const text = isPrintable
+    ? e.key
+    : (e.key === 'Enter' ? '\r' : e.key === 'Tab' ? '\t' : '');
+
+  sendEvent({ type: 'keydown', key: e.key, code: e.code, text, modifiers: m, keyCode });
+
+  // Additional char event for text fields to register input
+  if (isPrintable) {
+    sendEvent({ type: 'char', text: e.key, modifiers: m });
+  }
+}
+
+function onKeyUp(e) {
+  const keyCode = KEY_CODE_MAP[e.key] || e.keyCode || 0;
+  sendEvent({ type: 'keyup', key: e.key, code: e.code, modifiers: mods(e), keyCode });
+}
+
+// ── Navigation bar ────────────────────────────────────────────────────────────
+
+function onUrlKey(e) {
+  if (e.key === 'Enter') goUrl();
+}
+
+function goUrl() {
+  const url = document.getElementById('url-bar').value.trim();
+  if (url) sendEvent({ type: 'navigate', url });
+  if (canvas) canvas.focus();
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+
+function dot(on) {
+  document.getElementById('conn-dot').classList.toggle('connected', on);
+}
+
+function setStatus(s) {
+  document.getElementById('sb-info').textContent = s;
+}
+
+function updateUrlBar(url) {
+  document.getElementById('url-bar').value    = url;
+  document.getElementById('sb-url').textContent = url || '–';
+  document.getElementById('sb-url').title       = url || '–';
+}
+
+function setLoading(on) {
+  document.getElementById('progress-bar').classList.toggle('active', on);
+}
+
+// ── Auto-reconnect from query param ──────────────────────────────────────────
+
+const qs = new URLSearchParams(location.search);
+if (qs.has('session')) {
+  sessionId = qs.get('session');
+  BW = parseInt(qs.get('w') || '1280');
+  BH = parseInt(qs.get('h') || '720');
+  connectWS(`/ws/${sessionId}`);
+}
+</script>
+</body>
+</html>

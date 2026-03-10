@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  # ── Browserless (headless Chromium) ────────────────────────────────────────
+  browserless:
+    image: ghcr.io/browserless/chromium:latest
+    ports:
+      - "3000:3000"
+    environment:
+      # No auth token – suitable for local dev only
+      - TIMEOUT=120000        # session timeout in ms
+      - CONCURRENT=10         # max concurrent sessions
+      - QUEUE_LENGTH=10       # max queued sessions
+      - ENABLE_DEBUGGER=false # disable built-in debugger UI (we have our own)
+    restart: unless-stopped
+
+  # ── Browser VNC API ────────────────────────────────────────────────────────
+  browser-vnc:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - BROWSERLESS_URL=http://browserless:3000
+      - HOST=0.0.0.0
+      - PORT=8080
+    depends_on:
+      - browserless
+    restart: unless-stopped
