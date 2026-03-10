@@ -2,7 +2,7 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-cnjack/browserless--debugger-blue?logo=github)](https://github.com/cnjack/browserless-debugger)
 
-A VNC-style browser remote-control tool built on **Python (FastAPI)**, **Chrome DevTools Protocol (CDP)**, and **[Browserless](https://github.com/browserless/chromium)**.  
+A VNC-style browser remote-control tool built on **Python (FastAPI)**, **Chrome DevTools Protocol (CDP)**, and **[Browserless](https://github.com/browserless/browserless)**.  
 Stream a live headless browser to any web client — no browser extension or desktop app required.
 
 ![Entry screen](asset/enter.png)
