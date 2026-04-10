@@ -2,7 +2,7 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-cnjack/browserless--debugger-blue?logo=github)](https://github.com/cnjack/browserless-debugger)
 
-A VNC-style browser remote-control tool built on **Python (FastAPI)**, **Chrome DevTools Protocol (CDP)**, and **[Browserless](https://github.com/browserless/browserless)**.  
+A VNC-style browser remote-control tool built on **Python (FastAPI)** and **Chrome DevTools Protocol (CDP)**. It works with direct Chrome/Chromium CDP endpoints and still supports **[Browserless](https://github.com/browserless/browserless)**.  
 Stream a live headless browser to any web client — no browser extension or desktop app required.
 
 ![Entry screen](asset/enter.png)
@@ -27,7 +27,7 @@ Web Client (Canvas)
     ↕  WebSocket  (JPEG frames + input events)
 Python FastAPI server (main.py)
     ↕  CDP over WebSocket
-Browserless / Chromium
+CDP-compatible Chromium / Chrome
 ```
 
 ---
@@ -44,11 +44,15 @@ Then open http://localhost:8080 in your browser.
 
 ### Option 2 — Local development
 
-**1. Start Browserless**
+**1. Start a CDP-compatible browser**
 
 ```bash
-docker run -p 3000:3000 ghcr.io/browserless/chromium
+google-chrome --headless=new --remote-debugging-address=127.0.0.1 --remote-debugging-port=18800 --disable-gpu about:blank
+# or
+chromium --headless=new --remote-debugging-address=127.0.0.1 --remote-debugging-port=18800 --disable-gpu about:blank
 ```
+
+If you prefer Browserless, point `cdpUrl` or `CDP_URL` at that service instead.
 
 **2. Install Python dependencies**
 
@@ -87,7 +91,7 @@ Visit http://localhost:8080, enter a target URL, and click **Launch Browser**.
   "url": "https://example.com",
   "width": 1280,
   "height": 720,
-  "browserless_url": "http://localhost:3000"
+  "cdpUrl": "http://127.0.0.1:18800"
 }
 ```
 
@@ -137,9 +141,11 @@ Visit http://localhost:8080, enter a target URL, and click **Launch Browser**.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BROWSERLESS_URL` | `http://localhost:3000` | Browserless instance URL |
+| `CDP_URL` | `http://127.0.0.1:18800` | CDP HTTP endpoint used to create or attach to browser targets |
 | `HOST` | `0.0.0.0` | Server bind address |
 | `PORT` | `8080` | Server port |
+
+`BROWSERLESS_URL` is still accepted as a legacy alias for compatibility.
 
 ---
 
@@ -162,4 +168,4 @@ browerless-debugger/
 ## Security Notice
 
 This service has **no authentication** and is intended for local development or trusted internal networks only.  
-For production use, place a reverse proxy (Nginx / Caddy) in front with HTTPS and an auth layer, and configure the `TOKEN` environment variable on the Browserless container.
+For production use, place a reverse proxy (Nginx / Caddy) in front with HTTPS and an auth layer. If you are using Browserless as the backing CDP service, also configure the `TOKEN` environment variable on the Browserless container.

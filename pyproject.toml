@@ -1,7 +1,7 @@
 [project]
 name = "browerless-debugger"
 version = "0.1.0"
-description = "Browserless remote debugger with VNC-style browser streaming"
+description = "CDP remote debugger with VNC-style browser streaming"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

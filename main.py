@@ -2,21 +2,25 @@
 FastAPI application - Browser VNC API.
 
 Provides:
+  GET    /api/targets            - list CDP targets (tabs)
   POST   /api/sessions           - create a new browser session
   GET    /api/sessions           - list active sessions
   DELETE /api/sessions/{id}      - close a session
   WS     /ws/{id}               - real-time frame stream + input events
   GET    /                       - web VNC viewer
 """
+
 import asyncio
+import json
 import logging
 import os
 
+import httpx
 import uvicorn
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from browser import BrowserSession
 
@@ -28,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-BROWSERLESS_URL = os.getenv("BROWSERLESS_URL", "http://localhost:3000")
+DEFAULT_CDP_URL = os.getenv("CDP_URL") or os.getenv("BROWSERLESS_URL") or "http://127.0.0.1:18800"
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8080"))
 
@@ -37,7 +41,7 @@ PORT = int(os.getenv("PORT", "8080"))
 app = FastAPI(
     title="Browser VNC API",
     description=(
-        "Real-time browser remote-control API backed by Browserless. "
+        "Real-time browser remote-control API backed by a CDP-compatible browser. "
         "Streams JPEG frames via WebSocket (VNC-style) and accepts "
         "mouse/keyboard events."
     ),
@@ -53,10 +57,14 @@ sessions: dict[str, BrowserSession] = {}
 
 
 class SessionRequest(BaseModel):
-    url: str = Field("https://example.com", description="URL to open on launch")
-    browserless_url: str = Field(
-        None,
-        description="Override the Browserless endpoint for this session",
+    model_config = ConfigDict(populate_by_name=True)
+
+    url: str | None = Field(None, description="URL to open on launch (optional)")
+    cdp_url: str | None = Field(
+        default=None,
+        alias="cdpUrl",
+        validation_alias=AliasChoices("cdpUrl", "cdp_url", "browserless_url"),
+        description="Override the CDP endpoint for this session",
     )
     width: int = Field(1280, ge=320, le=3840, description="Viewport width in pixels")
     height: int = Field(720, ge=240, le=2160, description="Viewport height in pixels")
@@ -66,8 +74,16 @@ class SessionInfo(BaseModel):
     session_id: str
     ws_url: str
     viewer_url: str
-    url: str = ""
+    url: str | None = ""
     client_count: int = 0
+
+
+class TargetInfo(BaseModel):
+    id: str
+    title: str = ""
+    url: str = ""
+    type: str = "page"
+    ws_url: str = ""
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -78,25 +94,80 @@ async def root():
     return FileResponse("static/index.html")
 
 
+@app.get("/api/targets", response_model=list[TargetInfo], tags=["Targets"])
+async def list_targets(cdp_url: str | None = Query(None)):
+    """List all CDP targets (tabs) from the browser."""
+    cdp = cdp_url or DEFAULT_CDP_URL
+    if cdp.startswith(("ws://", "wss://")):
+        return []
+
+    base = cdp.rstrip("/")
+    if "/devtools" in base:
+        base = base.split("/devtools")[0]
+
+    try:
+        async with httpx.AsyncClient(timeout=5) as http:
+            resp = await http.get(f"{base}/json/list")
+            resp.raise_for_status()
+            targets = resp.json()
+    except Exception as e:
+        logger.warning("Failed to get targets from %s: %s", base, e)
+        return []
+
+    return [
+        TargetInfo(
+            id=t.get("id", ""),
+            title=t.get("title", ""),
+            url=t.get("url", ""),
+            type=t.get("type", "page"),
+            ws_url=t.get("webSocketDebuggerUrl", ""),
+        )
+        for t in targets
+        if t.get("type") == "page"
+    ]
+
+
+@app.delete("/api/close-target/{target_id}", tags=["Targets"])
+async def close_target(target_id: str, cdp_url: str | None = Query(None)):
+    """Close a CDP target (tab) by its ID."""
+    cdp = cdp_url or DEFAULT_CDP_URL
+    if cdp.startswith(("ws://", "wss://")):
+        raise HTTPException(status_code=400, detail="Cannot close target with WebSocket URL")
+
+    base = cdp.rstrip("/")
+    if "/devtools" in base:
+        base = base.split("/devtools")[0]
+
+    try:
+        async with httpx.AsyncClient(timeout=5) as http:
+            resp = await http.get(f"{base}/json/close/{target_id}")
+            resp.raise_for_status()
+    except Exception as e:
+        logger.warning("Failed to close target %s: %s", target_id, e)
+        raise HTTPException(status_code=500, detail=f"Failed to close target: {e}")
+
+    return {"status": "closed", "target_id": target_id}
+
+
 @app.post("/api/sessions", response_model=SessionInfo, tags=["Sessions"])
 async def create_session(req: SessionRequest):
     """
-    Spin up a new Chromium tab in Browserless and return a session ID.
+    Spin up or attach to a Chromium target over CDP and return a session ID.
     Connect to the WebSocket URL to receive live JPEG frames and send
     mouse/keyboard events.
     """
-    bl_url = req.browserless_url or BROWSERLESS_URL
-    session = BrowserSession(bl_url)
+    cdp_url = req.cdp_url or DEFAULT_CDP_URL
+    session = BrowserSession(cdp_url)
     session._vp_width = req.width
     session._vp_height = req.height
 
     try:
-        session_id = await session.start(req.url)
+        session_id = await session.start(req.url or "about:blank")
     except Exception as exc:
         logger.error("Failed to create session: %s", exc)
         raise HTTPException(
             status_code=503,
-            detail=f"Cannot connect to Browserless at {bl_url}: {exc}",
+            detail=f"Cannot connect to CDP endpoint at {cdp_url}: {exc}",
         ) from exc
 
     sessions[session_id] = session
@@ -107,6 +178,45 @@ async def create_session(req: SessionRequest):
         ws_url=f"/ws/{session_id}",
         viewer_url=f"/?session={session_id}",
         url=req.url,
+    )
+
+
+class AttachRequest(BaseModel):
+    target_id: str
+    cdp_url: str | None = Field(
+        default=None,
+        alias="cdpUrl",
+        description="CDP endpoint URL",
+    )
+    width: int = Field(1280, ge=320, le=3840)
+    height: int = Field(720, ge=240, le=2160)
+
+
+@app.post("/api/attach", response_model=SessionInfo, tags=["Sessions"])
+async def attach_to_target(req: AttachRequest):
+    """Attach to an existing CDP target (tab) by its ID."""
+    cdp_url = req.cdp_url or DEFAULT_CDP_URL
+    session = BrowserSession(cdp_url)
+    session._vp_width = req.width
+    session._vp_height = req.height
+
+    try:
+        session_id = await session.attach(req.target_id)
+    except Exception as exc:
+        logger.error("Failed to attach to target %s: %s", req.target_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Cannot attach to target: {exc}",
+        ) from exc
+
+    sessions[session_id] = session
+    logger.info("Attached to target: %s", session_id)
+
+    return SessionInfo(
+        session_id=session_id,
+        ws_url=f"/ws/{session_id}",
+        viewer_url=f"/?session={session_id}",
+        url="",
     )
 
 
@@ -131,6 +241,7 @@ async def close_session(session_id: str):
     session = sessions.pop(session_id, None)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    session._close_target = True
     await session.close()
     return {"status": "closed", "session_id": session_id}
 
@@ -167,6 +278,7 @@ async def ws_endpoint(websocket: WebSocket, session_id: str):
     session = sessions[session_id]
     await websocket.accept()
     session.add_client(websocket)
+    await websocket.send_text(json.dumps(session.get_state()))
     logger.info("WS client joined session %s (total: %d)", session_id, session.client_count)
 
     try:
