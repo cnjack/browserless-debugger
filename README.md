@@ -1,5 +1,7 @@
 # Browserless Debugger
 
+**Archived, moved to [https://github.com/cnjack/jbrowser](https://github.com/cnjack/jbrowser)**
+
 [![GitHub](https://img.shields.io/badge/GitHub-cnjack/browserless--debugger-blue?logo=github)](https://github.com/cnjack/browserless-debugger)
 
 A VNC-style browser remote-control tool built on **Python (FastAPI)** and **Chrome DevTools Protocol (CDP)**. It works with direct Chrome/Chromium CDP endpoints and still supports **[Browserless](https://github.com/browserless/browserless)**.  
